@@ -1,49 +1,84 @@
 import os
 import uvicorn
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
+from sqlalchemy.orm import Session
 
-# Assuming these will be created in subsequent steps
-# from .config import settings
-# from .database import database
-# from .docker_manager import DockerManager
-# from .task_manager import TaskManager
+# Actual imports for configuration, database, Docker, and task management
+from .config import settings
+from .database import init_db, SessionLocal
+from .docker_manager import DockerManager
+from .task_manager import TaskManager
+from . import scheduler # Import scheduler directly for start/shutdown
 
-# Placeholder for settings, DockerManager, TaskManager until files are generated
-class Settings:
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    FRONTEND_DIR = os.path.join(PROJECT_ROOT, 'dist') # Assuming React build output is 'dist'
+# Initialize DockerManager globally as it doesn't directly depend on a DB session per request
+docker_manager_instance = DockerManager()
 
-settings = Settings()
+# Dependency to get DB session for each request
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# Initialize FastAPI app
+# Lifespan context manager for application startup and shutdown events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup event: Initialize database and start the scheduler
+    print("Application startup: Initializing database and starting scheduler...")
+    init_db() # Create database tables if they don't exist
+
+    # TaskManager for the scheduler needs its own session, independent of request lifecycles
+    db_for_scheduler = SessionLocal()
+    try:
+        task_manager_for_scheduler = TaskManager(db_for_scheduler, docker_manager_instance)
+        scheduler.start_scheduler(task_manager_for_scheduler)
+    except Exception as e:
+        print(f"Error during scheduler startup: {e}")
+    finally:
+        # The session for the scheduler is managed internally by TaskManager/scheduler.
+        # We close the initial session used for starting the scheduler.
+        db_for_scheduler.close()
+
+    yield # Application runs
+
+    # Shutdown event: Gracefully shut down the scheduler
+    print("Application shutdown: Shutting down scheduler...")
+    scheduler.shutdown_scheduler()
+    print("Application shutdown complete.")
+
+# Initialize FastAPI app with the defined lifespan events
 app = FastAPI(
     title="Codehub Execution Engine",
     version="0.1.0",
-    description="API for managing codebase execution and server processes."
+    description="API for managing codebase execution and server processes.",
+    lifespan=lifespan # Attach the lifespan context manager
 )
 
-# Configure CORS
+# Configure CORS (Cross-Origin Resource Sharing)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this in production for security
+    allow_origins=["*"],  # Allow all origins for development; restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Serve static files for the frontend (React build)
-# This should be mounted last to prevent conflicts with API routes
+# This must be mounted last to prevent conflicts with API routes
 if os.path.exists(settings.FRONTEND_DIR):
+    print(f"Serving frontend from: {settings.FRONTEND_DIR}")
     app.mount("/", StaticFiles(directory=settings.FRONTEND_DIR, html=True), name="frontend")
 else:
     print(f"Warning: Frontend build directory not found at {settings.FRONTEND_DIR}")
     print("Please run 'npm run build' in the frontend directory.")
 
-# Pydantic models for request bodies
+# Pydantic models for request body validation
 class DirNameRequest(BaseModel):
     dir_name: str
 
@@ -55,77 +90,57 @@ class StopProcessRequest(BaseModel):
     dir_name: str
     ides: bool = False
 
-# API Endpoints
+# API Endpoints: Each endpoint creates a TaskManager instance with a new DB session
+# and the global DockerManager instance.
 @app.post("/execute_codebase")
-async def process_startup_sh(request: Request, dir_name: str = Form(...)):
+async def process_startup_sh(dir_name: str = Form(...), db: Session = Depends(get_db)):
     """Process and execute startup.sh file content."""
-    # Placeholder for actual DockerManager call
-    print(f"Executing startup.sh for directory: {dir_name}")
-    # await DockerManager.execute_startup_sh(dir_name)
-    return JSONResponse(content={"message": f"Startup script for {dir_name} initiated."})
+    task_manager = TaskManager(db, docker_manager_instance)
+    result = task_manager.process_startup_sh(dir_name)
+    return JSONResponse(content=result)
 
 @app.post("/code_server")
-async def start_codeserver(request: Request, dir_name: str = Form(...)):
+async def start_codeserver(dir_name: str = Form(...), db: Session = Depends(get_db)):
     """Start a code server"""
-    # Placeholder for actual DockerManager call
-    print(f"Starting code server for directory: {dir_name}")
-    # await DockerManager.start_codeserver(dir_name)
-    return JSONResponse(content={"message": f"Code server for {dir_name} started."})
+    task_manager = TaskManager(db, docker_manager_instance)
+    result = task_manager.start_codeserver(dir_name)
+    return JSONResponse(content=result)
 
 @app.post("/rollback_server")
-async def rollback_server(request: Request, commit_id: str = Form(...), dir_name: str = Form(...)):
+async def rollback_server(commit_id: str = Form(...), dir_name: str = Form(...), db: Session = Depends(get_db)):
     """Rollback the repository to a specific commit and restart the container."""
-    # Placeholder for actual DockerManager call
-    print(f"Rolling back {dir_name} to commit: {commit_id}")
-    # await DockerManager.rollback_server(dir_name, commit_id)
-    return JSONResponse(content={"message": f"Repository {dir_name} rolled back to {commit_id}."})
+    task_manager = TaskManager(db, docker_manager_instance)
+    result = task_manager.rollback_server(dir_name, commit_id)
+    return JSONResponse(content=result)
 
 @app.get("/logs/{dir_name}")
-async def get_container_logs(dir_name: str):
+async def get_container_logs(dir_name: str, db: Session = Depends(get_db)):
     """Fetch logs from the Docker container associated with the directory."""
-    # Placeholder for actual DockerManager call
-    print(f"Fetching logs for directory: {dir_name}")
-    # logs = await DockerManager.get_container_logs(dir_name)
-    # Simulate logs for now
-    simulated_logs = f"[INFO] {dir_name} log entry 1\n[WARN] {dir_name} log entry 2\n[ERROR] {dir_name} log entry 3\n"
-    return JSONResponse(content={"logs": simulated_logs})
+    task_manager = TaskManager(db, docker_manager_instance)
+    logs = task_manager.get_container_logs(dir_name)
+    return JSONResponse(content=logs)
 
 @app.get("/containers")
-async def list_docker_containers():
+async def list_docker_containers(db: Session = Depends(get_db)):
     """List all Docker containers with their details in JSON format."""
-    # Placeholder for actual DockerManager call
-    print("Listing Docker containers")
-    # containers = await DockerManager.list_containers()
-    # Simulate containers for now
-    simulated_containers = [
-        {"id": "abc1", "name": "my-project-repo", "status": "running"},
-        {"id": "def2", "name": "backend-service", "status": "stopped"},
-        {"id": "ghi3", "name": "frontend-app", "status": "running"}
-    ]
-    return JSONResponse(content=simulated_containers)
+    task_manager = TaskManager(db, docker_manager_instance)
+    containers = task_manager.list_docker_containers()
+    return JSONResponse(content=containers)
 
 @app.post("/stop_process")
-async def stop_process(request: Request, dir_name: str = Form(...), ides: bool = Form(False)):
-    """Stop a process or IDE for a given directory.""" 
-    # Placeholder for actual DockerManager call
-    print(f"Stopping process for directory: {dir_name}, IDES: {ides}")
-    # await DockerManager.stop_process(dir_name, ides)
-    return JSONResponse(content={"message": f"Process for {dir_name} stopped."})
+async def stop_process(dir_name: str = Form(...), ides: bool = Form(False), db: Session = Depends(get_db)):
+    """Stop a process or IDE for a given directory."""
+    task_manager = TaskManager(db, docker_manager_instance)
+    result = task_manager.stop_process(dir_name, ides)
+    return JSONResponse(content=result)
 
 @app.post("/upload_image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Upload a binary file (e.g., Docker image)."""
+    task_manager = TaskManager(db, docker_manager_instance)
     try:
-        # In a real scenario, you'd save the file and then process it (e.g., load into Docker)
-        file_location = f"/tmp/{file.filename}"
-        with open(file_location, "wb") as f:
-            while contents := await file.read(1024 * 1024):
-                f.write(contents)
-        print(f"File '{file.filename}' uploaded to {file_location}")
-        return JSONResponse(content={"message": f"File '{file.filename}' uploaded successfully.", "filename": file.filename})
+        file_content = await file.read() # File reading is an async operation
+        result = task_manager.upload_image(file_content, file.filename)
+        return JSONResponse(content=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
-
-# Example of how to run the app (for development)
-# if __name__ == "__main__":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
