@@ -7,18 +7,13 @@ echo "Starting Codehub Execution Engine setup..."
 
 # --- Frontend Setup (React with Vite) ---
 echo "Installing frontend dependencies..."
-cd src
 npm install
 
-echo "Building frontend application..."
+echo "Building frontend application... (Output to ./dist)"
 npm run build
-cd ..
 
-# Move the built frontend to the 'app/dist' directory for FastAPI to serve.
-# Ensure 'app/dist' exists before moving.
-mkdir -p app/dist
-rm -rf app/dist/*
-mv src/dist/* app/dist/
+# The built frontend will be in ./dist, which FastAPI will serve.
+# No need to move it to app/dist as FastAPI is configured to serve from project root's 'dist'.
 
 # --- Backend Setup (FastAPI) ---
 echo "Installing backend dependencies..."
