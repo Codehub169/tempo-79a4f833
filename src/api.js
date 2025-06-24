@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000'; // Assuming backend runs on port 8000
+const API_BASE_URL = 'http://34.28.45.117:9000'; // Updated to the correct IP and port
 
 const api = axios.create({
   baseURL: API_BASE_URL,
