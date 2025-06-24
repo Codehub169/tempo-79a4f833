@@ -14,7 +14,7 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       // Explicitly specify index.html as the entry point, relative to the project root
-      input: 'public/index.html',
+      input: 'index.html', // Corrected path: index.html is in the root, not public/
     },
   },
 });
