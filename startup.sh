@@ -18,7 +18,7 @@ cd ..
 # Ensure 'app/dist' exists before moving.
 mkdir -p app/dist
 rm -rf app/dist/*
-mv dist/* app/dist/
+mv src/dist/* app/dist/
 
 # --- Backend Setup (FastAPI) ---
 echo "Installing backend dependencies..."
