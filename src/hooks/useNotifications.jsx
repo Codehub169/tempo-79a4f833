@@ -8,7 +8,7 @@ export const NotificationProvider = ({ children }) => {
     const [notifications, setNotifications] = useState([]);
 
     const addNotification = useCallback((message, type = 'info', duration = 3000) => {
-        const id = Date.now(); // Simple unique ID
+        const id = Date.now();
         setNotifications(prevNotifications => [
             ...prevNotifications,
             { id, message, type, duration, onClose: () => removeNotification(id) }

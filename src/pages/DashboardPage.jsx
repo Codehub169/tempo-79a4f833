@@ -4,45 +4,41 @@ import Button from '../components/Button';
 import Modal from '../components/Modal';
 import Input from '../components/Input';
 import * as api from '../api';
-import { useNotifications } from '../hooks/useNotifications';
+import { useNotifications } from '../hooks/useNotifications.jsx';
 
 const DashboardPage = () => {
   const [containers, setContainers] = useState([]);
   const [isRollbackModalOpen, setIsRollbackModalOpen] = useState(false);
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [selectedDirName, setSelectedDirName] = useState('');
   const [commitId, setCommitId] = useState('');
-  const [fileToUpload, setFileToUpload] = useState(null);
-  const [loadingAction, setLoadingAction] = useState(null); // Tracks which action is loading
+  const [loadingAction, setLoadingAction] = useState(null);
 
   const navigate = useNavigate();
   const { addNotification } = useNotifications();
 
-  // --- Fetch Containers --- (Simulated for now, replace with actual API call)
   const fetchContainers = async () => {
-    // In a real app, you'd call api.listDockerContainers()
-    // For now, simulate data
-    const simulatedData = [
-      { id: '1', dir_name: 'my-project-repo', status: 'running', last_activity: '2 minutes ago' },
-      { id: '2', dir_name: 'backend-service', status: 'stopped', last_activity: '1 hour ago' },
-      { id: '3', dir_name: 'frontend-app', status: 'running', last_activity: '5 minutes ago' },
-      { id: '4', dir_name: 'data-pipeline', status: 'running', last_activity: '1 day ago' },
-      { id: '5', dir_name: 'ml-model-dev', status: 'stopped', last_activity: '3 days ago' },
-    ];
-    setContainers(simulatedData);
+    try {
+      const response = await api.listDockerContainers();
+      const formattedContainers = response.data.map(c => ({
+        ...c,
+        last_activity: c.last_activity || 'N/A'
+      }));
+      setContainers(formattedContainers);
+    } catch (error) {
+      console.error("Error fetching containers:", error);
+      addNotification("Failed to load containers.", "error");
+    }
   };
 
   useEffect(() => {
     fetchContainers();
-    // Optionally, set up an interval to refresh containers regularly
-    // const interval = setInterval(fetchContainers, 15000); // Refresh every 15 seconds
-    // return () => clearInterval(interval);
+    const interval = setInterval(fetchContainers, 15000);
+    return () => clearInterval(interval);
   }, []);
 
-  // --- Modal Handlers --- (Rollback & Upload)
   const openRollbackModal = (dirName) => {
     setSelectedDirName(dirName);
-    setCommitId(''); // Clear previous input
+    setCommitId('');
     setIsRollbackModalOpen(true);
   };
 
@@ -52,27 +48,14 @@ const DashboardPage = () => {
     setCommitId('');
   };
 
-  const openUploadModal = () => {
-    setFileToUpload(null);
-    setIsUploadModalOpen(true);
-  };
-
-  const closeUploadModal = () => {
-    setIsUploadModalOpen(false);
-    setFileToUpload(null);
-  };
-
-  // --- Action Handlers --- (API Calls)
-
-  const handleAction = async (actionFn, dirName, actionType, extraData = {}) => {
+  const handleAction = async (actionFn, dirName, actionType) => {
     setLoadingAction(`${actionType}-${dirName}`);
     try {
-      const response = await actionFn({ dir_name: dirName, ...extraData });
+      await actionFn(dirName);
       addNotification(`Successfully ${actionType} for ${dirName}.`, 'success');
-      // For start/stop, update status locally for immediate feedback
       setContainers(prevContainers =>
         prevContainers.map(c =>
-          c.dir_name === dirName ? { ...c, status: actionType === 'started' ? 'running' : (actionType === 'stopped' ? 'stopped' : c.status) } : c
+          c.dir_name === dirName ? { ...c, status: actionType === 'started code server' ? 'running' : (actionType === 'stopped process' ? 'stopped' : c.status) } : c
         )
       );
     } catch (error) {
@@ -80,8 +63,7 @@ const DashboardPage = () => {
       addNotification(`Failed to ${actionType} for ${dirName}. ${error.message || 'Please try again.'}`, 'error');
     } finally {
       setLoadingAction(null);
-      // In a real app, you might re-fetch containers for definitive status
-      // fetchContainers();
+      fetchContainers();
     }
   };
 
@@ -92,9 +74,8 @@ const DashboardPage = () => {
     }
     setLoadingAction(`rollback-${selectedDirName}`);
     try {
-      await api.rollbackServer({ dir_name: selectedDirName, commit_id: commitId });
+      await api.rollbackServer(commitId, selectedDirName);
       addNotification(`Codebase ${selectedDirName} rolled back to ${commitId}.`, 'success');
-      // Assuming rollback restarts the server
       setContainers(prevContainers =>
         prevContainers.map(c =>
           c.dir_name === selectedDirName ? { ...c, status: 'running' } : c
@@ -106,24 +87,7 @@ const DashboardPage = () => {
       addNotification(`Failed to rollback ${selectedDirName}. ${error.message || 'Please try again.'}`, 'error');
     } finally {
       setLoadingAction(null);
-    }
-  };
-
-  const handleUploadImage = async () => {
-    if (!fileToUpload) {
-      addNotification('Please select a file to upload.', 'error');
-      return;
-    }
-    setLoadingAction('upload-image');
-    try {
-      await api.uploadImage({ file: fileToUpload });
-      addNotification(`File '${fileToUpload.name}' uploaded successfully.`, 'success');
-      closeUploadModal();
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      addNotification(`Failed to upload image. ${error.message || 'Please try again.'}`, 'error');
-    } finally {
-      setLoadingAction(null);
+      fetchContainers();
     }
   };
 
@@ -196,7 +160,6 @@ const DashboardPage = () => {
         </div>
       </section>
 
-      {/* Rollback Modal */}
       <Modal isOpen={isRollbackModalOpen} onClose={closeRollbackModal} title="Rollback Codebase">
         <p className="text-secondary-text-color mb-4">
           Rollback <strong className="text-text-color">{selectedDirName}</strong> to a specific commit ID.
@@ -216,33 +179,6 @@ const DashboardPage = () => {
             disabled={loadingAction === `rollback-${selectedDirName}`}
           >
             {loadingAction === `rollback-${selectedDirName}` ? 'Rolling back...' : 'Rollback'}
-          </Button>
-        </div>
-      </Modal>
-
-      {/* Image Upload Modal */}
-      <Modal isOpen={isUploadModalOpen} onClose={closeUploadModal} title="Upload Image">
-        <p className="text-secondary-text-color mb-4">
-          Select a binary file (e.g., Docker image, project archive) to upload.
-        </p>
-        <input
-          type="file"
-          onChange={(e) => setFileToUpload(e.target.files[0])}
-          className="file:mr-4 file:py-2 file:px-4
-            file:rounded-full file:border-0
-            file:text-sm file:font-semibold
-            file:bg-gradient-to-r from-primary-color to-pink-500 file:text-background-color
-            hover:file:opacity-90 transition-opacity duration-200
-            cursor-pointer text-secondary-text-color"
-        />
-        <div className="flex justify-end space-x-3 mt-6">
-          <Button variant="secondary" onClick={closeUploadModal}>Cancel</Button>
-          <Button
-            variant="primary"
-            onClick={handleUploadImage}
-            disabled={loadingAction === 'upload-image'}
-          >
-            {loadingAction === 'upload-image' ? 'Uploading...' : 'Upload'}
           </Button>
         </div>
       </Modal>
